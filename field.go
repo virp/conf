@@ -36,7 +36,6 @@ type Field struct {
 
 // FieldOptions maintain flag options for a given field.
 type FieldOptions struct {
-	Help       string
 	DefaultVal string
 	EnvName    string
 	Required   bool
@@ -169,8 +168,6 @@ func parseTag(tagStr string) (FieldOptions, error) {
 				f.DefaultVal = tagPropVal
 			case "env":
 				f.EnvName = tagPropVal
-			case "help":
-				f.Help = tagPropVal
 			}
 		}
 	}
