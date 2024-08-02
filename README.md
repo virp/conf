@@ -1,6 +1,6 @@
 # Conf
 Simple configuration package for Go applications.
-It is simple and support only environment variables (for [12-Factor apps](https://12factor.net/#the_twelve_factors)).
+It is easy to use and this package support only environment variables (for [12-Factor apps](https://12factor.net/#the_twelve_factors)).
 
 ## Install
 ```bash
