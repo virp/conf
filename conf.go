@@ -9,8 +9,6 @@ import (
 // This function will apply the defaults first and then
 // apply environment variables to the struct.
 func Parse(prefix string, cfg any) error {
-	// Get the env variables.
-	env := newEnv(prefix)
 
 	// Get the list of fields from the configuration struct to process.
 	fields, err := extractFields(nil, cfg)
@@ -21,6 +19,16 @@ func Parse(prefix string, cfg any) error {
 	if len(fields) == 0 {
 		return errors.New("no fields identified in config struct")
 	}
+
+	var specifiedEnvNames []string
+	for _, field := range fields {
+		if field.Options.EnvName != "" {
+			specifiedEnvNames = append(specifiedEnvNames, field.Options.EnvName)
+		}
+	}
+
+	// Get the env variables.
+	env := newEnv(prefix, specifiedEnvNames)
 
 	// Process all fields found in the config struct provided.
 	for _, field := range fields {

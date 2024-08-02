@@ -71,7 +71,7 @@ func TestParse(t *testing.T) {
 		},
 		{
 			"env",
-			map[string]string{"TEST_AN_INT": "1", "TEST_A_STRING": "s", "TEST_BOOL": "TRUE", "TEST_SKIP": "SKIP", "TEST_IP_NAME_VAR": "local", "TEST_DEBUG_HOST": "http://sergey:gopher@0.0.0.0:4000", "TEST_PASSWORD": "gopher", "TEST_NAME": "virp", "TEST_DURATION": "1m"},
+			map[string]string{"TEST_AN_INT": "1", "TEST_A_STRING": "s", "TEST_BOOL": "TRUE", "TEST_SKIP": "SKIP", "IP_NAME_VAR": "local", "TEST_DEBUG_HOST": "http://sergey:gopher@0.0.0.0:4000", "TEST_PASSWORD": "gopher", "TEST_NAME": "virp", "TEST_DURATION": "1m"},
 			config{1, "s", true, "", ip{"local", "127.0.0.0", []string{"127.0.0.1:200", "127.0.0.1:829"}}, "http://sergey:gopher@0.0.0.0:4000", "gopher", CustomValue{something: "@hello@"}, Embed{"virp", time.Minute}},
 		},
 	}

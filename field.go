@@ -88,6 +88,7 @@ func extractFields(prefix []string, target any) ([]Field, error) {
 		// Drill down through pointers until we bottom out at type or nil.
 		for f.Kind() == reflect.Ptr {
 			if f.IsNil() {
+
 				// It's not a struct so leave it alone.
 				if f.Type().Elem().Kind() != reflect.Struct {
 					break
@@ -100,9 +101,11 @@ func extractFields(prefix []string, target any) ([]Field, error) {
 		}
 
 		switch {
+
 		// If we found a struct that can't deserialize itself, drill down,
 		// appending fields as we go.
 		case f.Kind() == reflect.Struct && setterFrom(f) == nil && textUnmarshaler(f) == nil && binaryUnmarshaler(f) == nil:
+
 			// Prefix for any sub keys is the fieldKey, unless it's anonymous,
 			// then it's just the prefix so far.
 			innerPrefix := fieldKey

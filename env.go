@@ -20,8 +20,13 @@ func (e *env) Value(fld Field) (string, bool) {
 }
 
 // newEnv accepts a prefix as a namespace and parses environment variables into a env.
-func newEnv(prefix string) *env {
+func newEnv(prefix string, include []string) *env {
 	m := make(map[string]string)
+
+	includeMap := make(map[string]struct{}, len(include))
+	for _, n := range include {
+		includeMap[n] = struct{}{}
+	}
 
 	// Create the uppercase version to meet the standard {NAMESPACE_} format.
 	// If the namespace is empty, remote _ from the beginning of the string.
@@ -32,11 +37,13 @@ func newEnv(prefix string) *env {
 
 	// Loop and match each variable using the uppercase namespace.
 	for _, val := range os.Environ() {
-		if !strings.HasPrefix(val, namespace) {
+		idx := strings.Index(val, "=")
+
+		_, givenEnvName := includeMap[val[0:idx]]
+		if !strings.HasPrefix(val, namespace) && !givenEnvName {
 			continue
 		}
 
-		idx := strings.Index(val, "=")
 		m[strings.ToUpper(strings.TrimPrefix(val[0:idx], namespace))] = val[idx+1:]
 	}
 
