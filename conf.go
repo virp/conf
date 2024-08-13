@@ -3,6 +3,7 @@ package conf
 import (
 	"errors"
 	"fmt"
+	"os"
 )
 
 // Parse parses the specified config struct.
@@ -11,34 +12,60 @@ import (
 func Parse(prefix string, cfg any) error {
 
 	// Get the list of fields from the configuration struct to process.
-	fields, err := extractFields(nil, cfg)
+	fields, err := extractFields(prefix, cfg)
 	if err != nil {
-		return err
+		return fmt.Errorf("extract fields from config struct: %w", err)
 	}
 
 	if len(fields) == 0 {
 		return errors.New("no fields identified in config struct")
 	}
 
-	var specifiedEnvNames []string
+	// Collect all env names for fields.
+	envNames := collectFieldsEnvNames(fields)
+
+	// Get all existed env variables values for fields.
+	envValues := getEnvValues(envNames)
+
+	// Process all fields found in the config struct provided.
+	if err := processFields(fields, envValues); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func collectFieldsEnvNames(fields []Field) []string {
+	envNames := make([]string, 0, len(fields))
+
 	for _, field := range fields {
-		if field.Options.EnvName != "" {
-			specifiedEnvNames = append(specifiedEnvNames, field.Options.EnvName)
+		envNames = append(envNames, field.EnvKey)
+	}
+
+	return envNames
+}
+
+func getEnvValues(envNames []string) map[string]string {
+	envValues := make(map[string]string)
+
+	for _, envName := range envNames {
+		if value, ok := os.LookupEnv(envName); ok {
+			envValues[envName] = value
 		}
 	}
 
-	// Get the env variables.
-	env := newEnv(prefix, specifiedEnvNames)
+	return envValues
+}
 
-	// Process all fields found in the config struct provided.
+func processFields(fields []Field, envValues map[string]string) error {
 	for _, field := range fields {
-		field := field
 
 		// Set any default value into the struct for this field.
 		if field.Options.DefaultVal != "" {
 			if err := processField(true, field.Options.DefaultVal, field.Field); err != nil {
 				return &FieldError{
 					fieldName: field.Name,
+					envKey:    field.EnvKey,
 					typeName:  field.Field.Type().String(),
 					value:     field.Options.DefaultVal,
 					err:       err,
@@ -46,11 +73,10 @@ func Parse(prefix string, cfg any) error {
 			}
 		}
 
-		value, ok := env.Value(field)
+		value, ok := envValues[field.EnvKey]
 
-		// If filed is marked 'required', check if no value was provided.
 		if field.Options.Required && !ok {
-			return fmt.Errorf("required field %s is missing value", field.Name)
+			return fmt.Errorf("required field %s (%s) is missing value", field.Name, field.EnvKey)
 		}
 
 		if !ok {
@@ -61,8 +87,9 @@ func Parse(prefix string, cfg any) error {
 		if err := processField(false, value, field.Field); err != nil {
 			return &FieldError{
 				fieldName: field.Name,
+				envKey:    field.EnvKey,
 				typeName:  field.Field.Type().String(),
-				value:     value,
+				value:     field.Options.DefaultVal,
 				err:       err,
 			}
 		}

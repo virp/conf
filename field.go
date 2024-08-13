@@ -17,19 +17,20 @@ var ErrInvalidStruct = errors.New("configuration must be a struct pointer")
 // in the provided struct value.
 type FieldError struct {
 	fieldName string
+	envKey    string
 	typeName  string
 	value     string
 	err       error
 }
 
 func (err *FieldError) Error() string {
-	return fmt.Sprintf("conf: error assigning to field %s: converting '%s' to type %s. details: %s", err.fieldName, err.value, err.typeName, err.err)
+	return fmt.Sprintf("error assigning to field %s (%s): converting '%s' to type %s. details: %s", err.fieldName, err.envKey, err.value, err.typeName, err.err)
 }
 
 // Field maintains information about a field in the configuration struct.
 type Field struct {
 	Name    string
-	EnvKeys []string
+	EnvKey  string
 	Field   reflect.Value
 	Options FieldOptions
 }
@@ -42,11 +43,7 @@ type FieldOptions struct {
 }
 
 // extractFields uses reflection to examine the struct and generate the keys.
-func extractFields(prefix []string, target any) ([]Field, error) {
-	if prefix == nil {
-		prefix = []string{}
-	}
-
+func extractFields(prefix string, target any) ([]Field, error) {
 	s := reflect.ValueOf(target)
 
 	if s.Kind() != reflect.Ptr {
@@ -78,11 +75,14 @@ func extractFields(prefix []string, target any) ([]Field, error) {
 
 		fieldOpts, err := parseTag(fieldTags)
 		if err != nil {
-			return nil, fmt.Errorf("conf: error parsing tags for field %s: %w", fieldName, err)
+			return nil, fmt.Errorf("parsing tags for field %s: %w", fieldName, err)
 		}
 
 		// Generate the field key.
-		fieldKey := append(prefix, camelSplit(fieldName)...)
+		fieldKey := strings.ToUpper(fmt.Sprintf("%s_%s", prefix, strings.Join(camelSplit(fieldName), "_")))
+		if prefix == "" {
+			fieldKey = fieldKey[1:]
+		}
 
 		// Drill down through pointers until we bottom out at type or nil.
 		for f.Kind() == reflect.Ptr {
@@ -120,15 +120,14 @@ func extractFields(prefix []string, target any) ([]Field, error) {
 			fields = append(fields, innerFields...)
 
 		default:
-			envKey := make([]string, len(fieldKey))
-			copy(envKey, fieldKey)
+			envKey := fieldKey
 			if fieldOpts.EnvName != "" {
-				envKey = strings.Split(fieldOpts.EnvName, "_")
+				envKey = fieldOpts.EnvName
 			}
 
 			fld := Field{
 				Name:    fieldName,
-				EnvKeys: envKey,
+				EnvKey:  envKey,
 				Field:   f,
 				Options: fieldOpts,
 			}
@@ -149,7 +148,7 @@ func parseTag(tagStr string) (FieldOptions, error) {
 	tagParts := strings.Split(tagStr, ",")
 	for _, tagPart := range tagParts {
 		vals := strings.SplitN(tagPart, ":", 2)
-		tagProp := vals[0]
+		tagProp := strings.TrimSpace(vals[0])
 
 		switch len(vals) {
 		case 1:

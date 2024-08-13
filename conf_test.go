@@ -3,6 +3,7 @@ package conf
 import (
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -85,7 +86,7 @@ func TestParse(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			var cfg config
 
-			if err := Parse("TEST", &cfg); err != nil {
+			if err := Parse("test", &cfg); err != nil {
 				t.Fatalf("\t%s\tShould be able to parse environment variables : %s.", failed, err)
 			}
 
@@ -124,17 +125,19 @@ func TestParse_EmptyNamespace(t *testing.T) {
 	t.Logf("%s\tShould have properly initialized struct value.", success)
 }
 
-func TestParserRequired(t *testing.T) {
-	t.Logf("When required values are missing.")
+func TestParse_Required(t *testing.T) {
+	t.Log("When required values are missing.")
 	{
 		t.Run("required-missing-value", func(t *testing.T) {
+			os.Clearenv()
+
 			var cfg struct {
-				TestInt    int `conf:"required, default:1"`
+				TestInt    int `conf:"required"`
 				TestString string
 				TestBool   bool
 			}
 
-			err := Parse("TEST", &cfg)
+			err := Parse("test", &cfg)
 			if err == nil {
 				t.Fatalf("\t%s\tShould fail for missing required value.", failed)
 			}
@@ -143,9 +146,10 @@ func TestParserRequired(t *testing.T) {
 		})
 	}
 
-	t.Logf("When required env integer is zero")
+	t.Log("When required env integer is zero.")
 	{
 		t.Run("required-env-integer-zero", func(t *testing.T) {
+			os.Clearenv()
 			_ = os.Setenv("TEST_TEST_INT", "0")
 
 			var cfg struct {
@@ -154,11 +158,141 @@ func TestParserRequired(t *testing.T) {
 				TestBool   bool
 			}
 
-			err := Parse("TEST", &cfg)
+			err := Parse("test", &cfg)
 			if err != nil {
 				t.Fatalf("\t%s\tShould have parsed the required zero env integer : %s.", failed, err)
 			}
 			t.Logf("\t%s\tShould have parsed the required zero env integer.", success)
+		})
+	}
+
+	t.Log("When required env string is empty.")
+	{
+		t.Run("required-env-string-empty", func(t *testing.T) {
+			os.Clearenv()
+			_ = os.Setenv("TEST_TEST_STRING", "")
+
+			var cfg struct {
+				TestInt    int
+				TestString string `conf:"required"`
+				TestBool   bool
+			}
+
+			err := Parse("test", &cfg)
+			if err != nil {
+				t.Fatalf("\t%s\tShould have parsed the required empty env string : %s.", failed, err)
+			}
+			t.Logf("\t%s\tShould have parsed the required empty env string.", success)
+		})
+	}
+
+	t.Log("When required env boolean is false.")
+	{
+		t.Run("required-env-boolean-false", func(t *testing.T) {
+			os.Clearenv()
+			_ = os.Setenv("TEST_TEST_BOOL", "false")
+
+			var cfg struct {
+				TestInt    int
+				TestString string
+				TestBool   bool `conf:"required"`
+			}
+
+			err := Parse("test", &cfg)
+			if err != nil {
+				t.Fatalf("\t%s\tSould have parsed the required false env boolean : %s.", failed, err)
+			}
+			t.Logf("\t%s\tSould have parsed the required false env boolean.", success)
+		})
+	}
+
+	t.Log("When struct has no fields.")
+	{
+		t.Run("struct-missing-fields", func(t *testing.T) {
+			os.Clearenv()
+
+			var cfg struct {
+				testInt    int `conf:"required"`
+				testString string
+				testBool   bool
+			}
+
+			err := Parse("test", &cfg)
+
+			if err == nil {
+				t.Fatalf("\t%s\tShould fail for struct with no exported fields.", failed)
+			}
+			t.Logf("\t%s\tShould fail for struct with no exported fields : %s.", success, err)
+		})
+	}
+
+	t.Log("When required env value missing error should contain env variable.")
+	{
+		t.Run("required-env-missing-error-message", func(t *testing.T) {
+			os.Clearenv()
+
+			var cfg struct {
+				TestInt    int `conf:"required"`
+				TestString string
+				TestBool   bool
+			}
+
+			err := Parse("test", &cfg)
+			if err == nil {
+				t.Fatalf("\t%s\tShould fail for missing required value.", failed)
+			}
+
+			if !strings.Contains(err.Error(), "TEST_TEST_INT") {
+				t.Fatalf("\t%s\tShoud fail for missing required value with env variablae name in message : %s.", failed, err)
+			}
+
+			t.Logf("\t%s\tShoud fail for missing required value with env variablae name in message : %s.", success, err)
+		})
+	}
+}
+
+func TestParse_Errors(t *testing.T) {
+	t.Log("When passing struct to Parse.")
+	{
+		t.Run("not-by-ref", func(t *testing.T) {
+			var cfg struct {
+				TestInt    int
+				TestString string
+				TestBool   bool
+			}
+
+			err := Parse("test", cfg)
+			if err == nil {
+				t.Fatalf("\t%s\tShould NOT be able to accept a value by value.", failed)
+			}
+			t.Logf("\t%s\tShould NOT be able to accept a value by value : %s.", success, err)
+		})
+
+		t.Run("not-struct-value", func(t *testing.T) {
+			var cfg []string
+
+			err := Parse("test", &cfg)
+			if err == nil {
+				t.Fatalf("\t%s\tShould NOT be able to pass anything but a struct value.", failed)
+			}
+			t.Logf("\t%s\tShould NOT be able to pass anything but a struct value : %s.", success, err)
+		})
+	}
+
+	t.Log("When bad tags to Parse.")
+	{
+		t.Run("tag-missing-value", func(t *testing.T) {
+			var cfg struct {
+				TestInt    int `conf:"default:"`
+				TestString string
+				TestBool   bool
+			}
+
+			err := Parse("test", &cfg)
+			if err == nil {
+				t.Fatalf("\t%s\tShould NOT be able to accept tag missing value.", failed)
+			}
+			t.Logf("\t%s\tShould NOT be able to accept tag missing value : %s.", success, err)
 		})
 	}
 }
