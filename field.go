@@ -11,6 +11,7 @@ import (
 	"unicode"
 )
 
+// ErrInvalidStruct is returned when configuration target is not a struct pointer.
 var ErrInvalidStruct = errors.New("configuration must be a struct pointer")
 
 // A FieldError occurs when an error occurs updating an individual field
@@ -27,23 +28,38 @@ func (err *FieldError) Error() string {
 	return fmt.Sprintf("error assigning to field %s (%s): converting '%s' to type %s. details: %s", err.fieldName, err.envKey, err.value, err.typeName, err.err)
 }
 
-// Field maintains information about a field in the configuration struct.
-type Field struct {
-	Name    string
-	EnvKey  string
-	Field   reflect.Value
-	Options FieldOptions
+type field struct {
+	name        string
+	envKeys     []string
+	value       reflect.Value
+	options     fieldOptions
+	createdPtrs []*createdPointer
 }
 
-// FieldOptions maintain flag options for a given field.
-type FieldOptions struct {
-	DefaultVal string
-	EnvName    string
-	Required   bool
+type createdPointer struct {
+	value   reflect.Value
+	touched bool
+}
+
+type fieldOptions struct {
+	defaultVal string
+	envName    string
+	required   bool
 }
 
 // extractFields uses reflection to examine the struct and generate the keys.
-func extractFields(prefix string, target any) ([]Field, error) {
+func extractFields(prefix string, target any) ([]field, error) {
+	var createdPtrs []*createdPointer
+	fields, err := extractFieldsWithCreated(prefix, target, &createdPtrs, nil)
+	if err != nil {
+		cleanupCreatedPointerList(createdPtrs)
+		return nil, err
+	}
+
+	return fields, nil
+}
+
+func extractFieldsWithCreated(prefix string, target any, allCreatedPtrs *[]*createdPointer, parentCreatedPtrs []*createdPointer) ([]field, error) {
 	s := reflect.ValueOf(target)
 
 	if s.Kind() != reflect.Ptr {
@@ -57,11 +73,12 @@ func extractFields(prefix string, target any) ([]Field, error) {
 
 	targetType := s.Type()
 
-	var fields []Field
+	var fields []field
 
 	for i := 0; i < s.NumField(); i++ {
 		f := s.Field(i)
 		structField := targetType.Field(i)
+		fieldCreatedPtrs := parentCreatedPtrs
 
 		// Get the conf tags associated with this item.
 		fieldTags := structField.Tag.Get("conf")
@@ -79,10 +96,7 @@ func extractFields(prefix string, target any) ([]Field, error) {
 		}
 
 		// Generate the field key.
-		fieldKey := strings.ToUpper(fmt.Sprintf("%s_%s", prefix, strings.Join(camelSplit(fieldName), "_")))
-		if prefix == "" {
-			fieldKey = fieldKey[1:]
-		}
+		fieldKey := fieldEnvKey(prefix, fieldName)
 
 		// Drill down through pointers until we bottom out at type or nil.
 		for f.Kind() == reflect.Ptr {
@@ -95,6 +109,9 @@ func extractFields(prefix string, target any) ([]Field, error) {
 
 				// It's a struct so zero it out.
 				f.Set(reflect.New(f.Type().Elem()))
+				createdPtr := &createdPointer{value: f}
+				*allCreatedPtrs = append(*allCreatedPtrs, createdPtr)
+				fieldCreatedPtrs = append(fieldCreatedPtrs, createdPtr)
 			}
 			f = f.Elem()
 		}
@@ -113,23 +130,24 @@ func extractFields(prefix string, target any) ([]Field, error) {
 			}
 
 			embeddedPtr := f.Addr().Interface()
-			innerFields, err := extractFields(innerPrefix, embeddedPtr)
+			innerFields, err := extractFieldsWithCreated(innerPrefix, embeddedPtr, allCreatedPtrs, fieldCreatedPtrs)
 			if err != nil {
 				return nil, err
 			}
 			fields = append(fields, innerFields...)
 
 		default:
-			envKey := fieldKey
-			if fieldOpts.EnvName != "" {
-				envKey = fieldOpts.EnvName
+			envKeys := []string{fieldKey}
+			if fieldOpts.envName != "" {
+				envKeys = []string{fieldOpts.envName, fieldKey}
 			}
 
-			fld := Field{
-				Name:    fieldName,
-				EnvKey:  envKey,
-				Field:   f,
-				Options: fieldOpts,
+			fld := field{
+				name:        fieldName,
+				envKeys:     envKeys,
+				value:       f,
+				options:     fieldOpts,
+				createdPtrs: fieldCreatedPtrs,
 			}
 			fields = append(fields, fld)
 		}
@@ -138,15 +156,34 @@ func extractFields(prefix string, target any) ([]Field, error) {
 	return fields, nil
 }
 
-func parseTag(tagStr string) (FieldOptions, error) {
-	var f FieldOptions
+func fieldEnvKey(prefix, fieldName string) string {
+	fieldNameKey := strings.Join(camelSplit(fieldName), "_")
+	if prefix == "" {
+		return strings.ToUpper(fieldNameKey)
+	}
+
+	return strings.ToUpper(fmt.Sprintf("%s_%s", prefix, fieldNameKey))
+}
+
+func cleanupCreatedPointerList(createdPtrs []*createdPointer) {
+	for i := len(createdPtrs) - 1; i >= 0; i-- {
+		createdPtr := createdPtrs[i]
+		if createdPtr.touched {
+			continue
+		}
+
+		createdPtr.value.SetZero()
+	}
+}
+
+func parseTag(tagStr string) (fieldOptions, error) {
+	var f fieldOptions
 
 	if tagStr == "" {
 		return f, nil
 	}
 
-	tagParts := strings.Split(tagStr, ",")
-	for _, tagPart := range tagParts {
+	for tagPart := range strings.SplitSeq(tagStr, ",") {
 		vals := strings.SplitN(tagPart, ":", 2)
 		tagProp := strings.TrimSpace(vals[0])
 
@@ -154,7 +191,9 @@ func parseTag(tagStr string) (FieldOptions, error) {
 		case 1:
 			switch tagProp {
 			case "required":
-				f.Required = true
+				f.required = true
+			default:
+				return f, fmt.Errorf("unknown tag %q", tagProp)
 			}
 		case 2:
 			tagPropVal := strings.TrimSpace(vals[1])
@@ -164,16 +203,18 @@ func parseTag(tagStr string) (FieldOptions, error) {
 
 			switch tagProp {
 			case "default":
-				f.DefaultVal = tagPropVal
+				f.defaultVal = tagPropVal
 			case "env":
-				f.EnvName = tagPropVal
+				f.envName = tagPropVal
+			default:
+				return f, fmt.Errorf("unknown tag %q", tagProp)
 			}
 		}
 	}
 
 	// Perform a sanity check.
-	if f.Required && f.DefaultVal != "" {
-		return f, fmt.Errorf("cannot set both `required` and `default`")
+	if f.required && f.defaultVal != "" {
+		return f, errors.New("cannot set both `required` and `default`")
 	}
 
 	return f, nil
@@ -252,73 +293,73 @@ type Setter interface {
 	Set(value string) error
 }
 
-func setterFrom(field reflect.Value) (s Setter) {
-	interfaceFrom(field, func(v any, ok *bool) { s, *ok = v.(Setter) })
+func setterFrom(rv reflect.Value) (s Setter) {
+	interfaceFrom(rv, func(v any, ok *bool) { s, *ok = v.(Setter) })
 	return s
 }
 
-func textUnmarshaler(field reflect.Value) (t encoding.TextUnmarshaler) {
-	interfaceFrom(field, func(v any, ok *bool) { t, *ok = v.(encoding.TextUnmarshaler) })
+func textUnmarshaler(rv reflect.Value) (t encoding.TextUnmarshaler) {
+	interfaceFrom(rv, func(v any, ok *bool) { t, *ok = v.(encoding.TextUnmarshaler) })
 	return t
 }
 
-func binaryUnmarshaler(field reflect.Value) (b encoding.BinaryUnmarshaler) {
-	interfaceFrom(field, func(v any, ok *bool) { b, *ok = v.(encoding.BinaryUnmarshaler) })
+func binaryUnmarshaler(rv reflect.Value) (b encoding.BinaryUnmarshaler) {
+	interfaceFrom(rv, func(v any, ok *bool) { b, *ok = v.(encoding.BinaryUnmarshaler) })
 	return b
 }
 
-func interfaceFrom(field reflect.Value, fn func(any, *bool)) {
-	if !field.CanInterface() {
+func interfaceFrom(rv reflect.Value, fn func(any, *bool)) {
+	if !rv.CanInterface() {
 		return
 	}
 
 	var ok bool
 
-	fn(field.Interface(), &ok)
+	fn(rv.Interface(), &ok)
 
-	if !ok && field.CanAddr() {
-		fn(field.Addr().Interface(), &ok)
+	if !ok && rv.CanAddr() {
+		fn(rv.Addr().Interface(), &ok)
 	}
 }
 
-func processField(settingDefault bool, value string, field reflect.Value) error {
-	typ := field.Type()
+func processField(settingDefault bool, value string, rv reflect.Value) error {
+	typ := rv.Type()
 
 	if typ.Kind() == reflect.Ptr {
 		typ = typ.Elem()
-		if field.IsNil() {
-			field.Set(reflect.New(typ))
+		if rv.IsNil() {
+			rv.Set(reflect.New(typ))
 		}
-		field = field.Elem()
+		rv = rv.Elem()
 	}
 
-	if settingDefault && !field.IsZero() {
+	if settingDefault && !rv.IsZero() {
 		return nil
 	}
 
-	setter := setterFrom(field)
+	setter := setterFrom(rv)
 	if setter != nil {
 		return setter.Set(value)
 	}
 
-	if t := textUnmarshaler(field); t != nil {
+	if t := textUnmarshaler(rv); t != nil {
 		return t.UnmarshalText([]byte(value))
 	}
 
-	if b := binaryUnmarshaler(field); b != nil {
+	if b := binaryUnmarshaler(rv); b != nil {
 		return b.UnmarshalBinary([]byte(value))
 	}
 
 	switch typ.Kind() {
 	case reflect.String:
-		field.SetString(value)
+		rv.SetString(value)
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
 		var (
 			val int64
 			err error
 		)
 
-		if field.Kind() == reflect.Int64 && typ.PkgPath() == "time" && typ.Name() == "Duration" {
+		if rv.Kind() == reflect.Int64 && typ.PkgPath() == "time" && typ.Name() == "Duration" {
 			var d time.Duration
 			d, err = time.ParseDuration(value)
 			val = int64(d)
@@ -329,28 +370,28 @@ func processField(settingDefault bool, value string, field reflect.Value) error 
 			return err
 		}
 
-		field.SetInt(val)
+		rv.SetInt(val)
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
 		val, err := strconv.ParseUint(value, 0, typ.Bits())
 		if err != nil {
 			return err
 		}
 
-		field.SetUint(val)
+		rv.SetUint(val)
 	case reflect.Bool:
 		val, err := strconv.ParseBool(value)
 		if err != nil {
 			return err
 		}
 
-		field.SetBool(val)
+		rv.SetBool(val)
 	case reflect.Float32, reflect.Float64:
 		val, err := strconv.ParseFloat(value, typ.Bits())
 		if err != nil {
 			return err
 		}
 
-		field.SetFloat(val)
+		rv.SetFloat(val)
 	case reflect.Slice:
 		vals := strings.Split(value, ";")
 		sl := reflect.MakeSlice(typ, len(vals), len(vals))
@@ -361,13 +402,12 @@ func processField(settingDefault bool, value string, field reflect.Value) error 
 			}
 		}
 
-		field.Set(sl)
+		rv.Set(sl)
 	case reflect.Map:
 		mp := reflect.MakeMap(typ)
-		if len(strings.TrimSpace(value)) != 0 {
-			pairs := strings.Split(value, ";")
-			for _, pair := range pairs {
-				kvPair := strings.Split(pair, ":")
+		if strings.TrimSpace(value) != "" {
+			for pair := range strings.SplitSeq(value, ";") {
+				kvPair := strings.SplitN(pair, ":", 2)
 				if len(kvPair) != 2 {
 					return fmt.Errorf("invalid map item: %q", pair)
 				}
@@ -386,7 +426,7 @@ func processField(settingDefault bool, value string, field reflect.Value) error 
 				mp.SetMapIndex(k, v)
 			}
 		}
-		field.Set(mp)
+		rv.Set(mp)
 	default:
 		return fmt.Errorf("unsupported type: %q", typ)
 	}
