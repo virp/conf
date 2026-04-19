@@ -1,0 +1,11 @@
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+
+version: '3'
+
+tasks:
+  lint:
+    desc: Run linters
+    cmd: golangci-lint run
+  test:
+    desc: Run tests
+    cmd: go test ./... -v -race

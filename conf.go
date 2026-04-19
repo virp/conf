@@ -4,12 +4,25 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 )
 
 // Parse parses the specified config struct.
 // This function will apply the defaults first and then
 // apply environment variables to the struct.
 func Parse(prefix string, cfg any) error {
+	return ParseWithLookup(prefix, cfg, os.LookupEnv)
+}
+
+// LookupFunc looks up a value by environment variable name.
+type LookupFunc func(key string) (string, bool)
+
+// ParseWithLookup parses the specified config struct using lookup as the
+// environment variable source.
+func ParseWithLookup(prefix string, cfg any, lookup LookupFunc) error {
+	if lookup == nil {
+		return errors.New("lookup function is nil")
+	}
 
 	// Get the list of fields from the configuration struct to process.
 	fields, err := extractFields(prefix, cfg)
@@ -20,12 +33,13 @@ func Parse(prefix string, cfg any) error {
 	if len(fields) == 0 {
 		return errors.New("no fields identified in config struct")
 	}
+	defer cleanupCreatedPointers(fields)
 
 	// Collect all env names for fields.
 	envNames := collectFieldsEnvNames(fields)
 
 	// Get all existed env variables values for fields.
-	envValues := getEnvValues(envNames)
+	envValues := getEnvValues(envNames, lookup)
 
 	// Process all fields found in the config struct provided.
 	if err := processFields(fields, envValues); err != nil {
@@ -35,21 +49,21 @@ func Parse(prefix string, cfg any) error {
 	return nil
 }
 
-func collectFieldsEnvNames(fields []Field) []string {
+func collectFieldsEnvNames(fields []field) []string {
 	envNames := make([]string, 0, len(fields))
 
-	for _, field := range fields {
-		envNames = append(envNames, field.EnvKey)
+	for i := range fields {
+		envNames = append(envNames, fields[i].envKeys...)
 	}
 
 	return envNames
 }
 
-func getEnvValues(envNames []string) map[string]string {
+func getEnvValues(envNames []string, lookup LookupFunc) map[string]string {
 	envValues := make(map[string]string)
 
 	for _, envName := range envNames {
-		if value, ok := os.LookupEnv(envName); ok {
+		if value, ok := lookup(envName); ok {
 			envValues[envName] = value
 		}
 	}
@@ -57,26 +71,28 @@ func getEnvValues(envNames []string) map[string]string {
 	return envValues
 }
 
-func processFields(fields []Field, envValues map[string]string) error {
-	for _, field := range fields {
+func processFields(fields []field, envValues map[string]string) error {
+	for i := range fields {
+		fld := &fields[i]
 
 		// Set any default value into the struct for this field.
-		if field.Options.DefaultVal != "" {
-			if err := processField(true, field.Options.DefaultVal, field.Field); err != nil {
+		if fld.options.defaultVal != "" {
+			if err := processField(true, fld.options.defaultVal, fld.value); err != nil {
 				return &FieldError{
-					fieldName: field.Name,
-					envKey:    field.EnvKey,
-					typeName:  field.Field.Type().String(),
-					value:     field.Options.DefaultVal,
+					fieldName: fld.name,
+					envKey:    primaryEnvKey(fld),
+					typeName:  fld.value.Type().String(),
+					value:     fld.options.defaultVal,
 					err:       err,
 				}
 			}
+			markCreatedPointers(fld)
 		}
 
-		value, ok := envValues[field.EnvKey]
+		value, envKey, ok := lookupFieldEnv(fld, envValues)
 
-		if field.Options.Required && !ok {
-			return fmt.Errorf("required field %s (%s) is missing value", field.Name, field.EnvKey)
+		if fld.options.required && !ok {
+			return fmt.Errorf("required field %s (%s) is missing value", fld.name, strings.Join(fld.envKeys, " or "))
 		}
 
 		if !ok {
@@ -84,16 +100,59 @@ func processFields(fields []Field, envValues map[string]string) error {
 		}
 
 		// A value was found so update the struct value with it.
-		if err := processField(false, value, field.Field); err != nil {
+		if err := processField(false, value, fld.value); err != nil {
 			return &FieldError{
-				fieldName: field.Name,
-				envKey:    field.EnvKey,
-				typeName:  field.Field.Type().String(),
-				value:     field.Options.DefaultVal,
+				fieldName: fld.name,
+				envKey:    envKey,
+				typeName:  fld.value.Type().String(),
+				value:     value,
 				err:       err,
 			}
 		}
+		markCreatedPointers(fld)
 	}
 
 	return nil
+}
+
+func primaryEnvKey(fld *field) string {
+	if len(fld.envKeys) == 0 {
+		return ""
+	}
+
+	return fld.envKeys[0]
+}
+
+func markCreatedPointers(fld *field) {
+	for _, createdPtr := range fld.createdPtrs {
+		createdPtr.touched = true
+	}
+}
+
+func cleanupCreatedPointers(fields []field) {
+	var createdPtrs []*createdPointer
+	seen := make(map[*createdPointer]bool)
+
+	for i := range fields {
+		for _, createdPtr := range fields[i].createdPtrs {
+			if seen[createdPtr] {
+				continue
+			}
+
+			seen[createdPtr] = true
+			createdPtrs = append(createdPtrs, createdPtr)
+		}
+	}
+
+	cleanupCreatedPointerList(createdPtrs)
+}
+
+func lookupFieldEnv(fld *field, envValues map[string]string) (string, string, bool) {
+	for _, envKey := range fld.envKeys {
+		if value, ok := envValues[envKey]; ok {
+			return value, envKey, true
+		}
+	}
+
+	return "", "", false
 }

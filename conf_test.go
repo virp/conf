@@ -7,12 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/go-cmp/cmp"
-)
-
-const (
-	success = "\u2713"
-	failed  = "\u2717"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // CustomValue provides support for testing a custom value.
@@ -27,12 +23,12 @@ func (c *CustomValue) Set(data string) error {
 }
 
 // String implements the Stringer interface
-func (c CustomValue) String() string {
+func (c *CustomValue) String() string {
 	return c.something
 }
 
-// Equal implements the Equal "interface" for go-cmp
-func (c CustomValue) Equal(o CustomValue) bool {
+// Equal compares custom values in tests.
+func (c *CustomValue) Equal(o *CustomValue) bool {
 	return c.something == o.something
 }
 
@@ -66,233 +62,455 @@ func TestParse(t *testing.T) {
 		want config
 	}{
 		{
-			"default",
-			nil,
-			config{9, "B", false, "", ip{"localhost", "127.0.0.0", []string{"127.0.0.1:200", "127.0.0.1:829"}}, "https://user:password@0.0.0.0:4000", "password", CustomValue{something: "@hello@"}, Embed{"sergey", time.Second}},
+			name: "default",
+			want: config{
+				AnInt:     9,
+				AString:   "B",
+				IP:        ip{Name: "localhost", IP: "127.0.0.0", Endpoints: []string{"127.0.0.1:200", "127.0.0.1:829"}},
+				DebugHost: "https://user:password@0.0.0.0:4000",
+				Password:  "password",
+				Custom:    CustomValue{something: "@hello@"},
+				Embed:     Embed{Name: "sergey", Duration: time.Second},
+			},
 		},
 		{
-			"env",
-			map[string]string{"TEST_AN_INT": "1", "TEST_A_STRING": "s", "TEST_BOOL": "TRUE", "TEST_SKIP": "SKIP", "IP_NAME_VAR": "local", "TEST_DEBUG_HOST": "http://sergey:gopher@0.0.0.0:4000", "TEST_PASSWORD": "gopher", "TEST_NAME": "virp", "TEST_DURATION": "1m"},
-			config{1, "s", true, "", ip{"local", "127.0.0.0", []string{"127.0.0.1:200", "127.0.0.1:829"}}, "http://sergey:gopher@0.0.0.0:4000", "gopher", CustomValue{something: "@hello@"}, Embed{"virp", time.Minute}},
+			name: "env",
+			envs: map[string]string{
+				"TEST_AN_INT":     "1",
+				"TEST_A_STRING":   "s",
+				"TEST_BOOL":       "TRUE",
+				"TEST_SKIP":       "SKIP",
+				"IP_NAME_VAR":     "local",
+				"TEST_DEBUG_HOST": "http://sergey:gopher@0.0.0.0:4000",
+				"TEST_PASSWORD":   "gopher",
+				"TEST_NAME":       "virp",
+				"TEST_DURATION":   "1m",
+			},
+			want: config{
+				AnInt:     1,
+				AString:   "s",
+				Bool:      true,
+				IP:        ip{Name: "local", IP: "127.0.0.0", Endpoints: []string{"127.0.0.1:200", "127.0.0.1:829"}},
+				DebugHost: "http://sergey:gopher@0.0.0.0:4000",
+				Password:  "gopher",
+				Custom:    CustomValue{something: "@hello@"},
+				Embed:     Embed{Name: "virp", Duration: time.Minute},
+			},
 		},
 	}
 
 	for _, tt := range tests {
-		os.Clearenv()
-		for k, v := range tt.envs {
-			_ = os.Setenv(k, v)
-		}
-
 		t.Run(tt.name, func(t *testing.T) {
+			setEnvs(t, tt.envs)
+
 			var cfg config
-
-			if err := Parse("test", &cfg); err != nil {
-				t.Fatalf("\t%s\tShould be able to parse environment variables : %s.", failed, err)
-			}
-
-			t.Logf("%s\tShould be able to parse environment variables.", success)
-
-			if diff := cmp.Diff(tt.want, cfg); diff != "" {
-				t.Fatalf("%s\tShould have properly initialized struct value\n%s", failed, diff)
-			}
-
-			t.Logf("%s\tShould have properly initialized struct value.", success)
+			require.NoError(t, Parse("test", &cfg))
+			assert.Equal(t, tt.want, cfg)
 		})
 	}
 }
 
-func TestParse_EmptyNamespace(t *testing.T) {
-	envs := map[string]string{"AN_INT": "1", "A_STRING": "s", "BOOL": "TRUE", "SKIP": "SKIP", "IP_NAME_VAR": "local", "DEBUG_HOST": "http://bill:gopher@0.0.0.0:4000", "PASSWORD": "gopher", "NAME": "andy", "DURATION": "1m"}
-	want := config{1, "s", true, "", ip{"local", "127.0.0.0", []string{"127.0.0.1:200", "127.0.0.1:829"}}, "http://bill:gopher@0.0.0.0:4000", "gopher", CustomValue{something: "@hello@"}, Embed{"andy", time.Minute}}
+func TestParse_EmptyPrefix(t *testing.T) {
+	setEnvs(t, map[string]string{
+		"AN_INT":      "1",
+		"A_STRING":    "s",
+		"BOOL":        "TRUE",
+		"SKIP":        "SKIP",
+		"IP_NAME_VAR": "local",
+		"DEBUG_HOST":  "http://bill:gopher@0.0.0.0:4000",
+		"PASSWORD":    "gopher",
+		"NAME":        "andy",
+		"DURATION":    "1m",
+	})
 
-	os.Clearenv()
-	for k, v := range envs {
-		_ = os.Setenv(k, v)
+	want := config{
+		AnInt:     1,
+		AString:   "s",
+		Bool:      true,
+		IP:        ip{Name: "local", IP: "127.0.0.0", Endpoints: []string{"127.0.0.1:200", "127.0.0.1:829"}},
+		DebugHost: "http://bill:gopher@0.0.0.0:4000",
+		Password:  "gopher",
+		Custom:    CustomValue{something: "@hello@"},
+		Embed:     Embed{Name: "andy", Duration: time.Minute},
 	}
 
 	var cfg config
+	require.NoError(t, Parse("", &cfg))
+	assert.Equal(t, want, cfg)
+}
 
-	if err := Parse("", &cfg); err != nil {
-		t.Fatalf("%s\tShould be able to parse environment variables : %s.", failed, err)
+func TestParseWithLookup(t *testing.T) {
+	tests := []struct {
+		name        string
+		envs        map[string]string
+		processEnv  map[string]string
+		lookup      LookupFunc
+		nilLookup   bool
+		requireFunc func(*testing.T, config, error)
+	}{
+		{
+			name: "uses-injected-lookup",
+			envs: map[string]string{
+				"TEST_AN_INT":     "42",
+				"TEST_A_STRING":   "lookup",
+				"TEST_BOOL":       "true",
+				"TEST_DEBUG_HOST": "http://lookup.example.com",
+				"TEST_NAME":       "lookup-name",
+				"TEST_DURATION":   "2m",
+			},
+			requireFunc: func(t *testing.T, cfg config, err error) {
+				require.NoError(t, err)
+				assert.Equal(t, config{
+					AnInt:     42,
+					AString:   "lookup",
+					Bool:      true,
+					IP:        ip{Name: "localhost", IP: "127.0.0.0", Endpoints: []string{"127.0.0.1:200", "127.0.0.1:829"}},
+					DebugHost: "http://lookup.example.com",
+					Password:  "password",
+					Custom:    CustomValue{something: "@hello@"},
+					Embed:     Embed{Name: "lookup-name", Duration: 2 * time.Minute},
+				}, cfg)
+			},
+		},
+		{
+			name:       "does-not-read-process-env",
+			processEnv: map[string]string{"TEST_AN_INT": "99"},
+			envs:       nil,
+			requireFunc: func(t *testing.T, cfg config, err error) {
+				require.NoError(t, err)
+				assert.Equal(t, 9, cfg.AnInt)
+			},
+		},
+		{
+			name:      "nil-lookup",
+			nilLookup: true,
+			requireFunc: func(t *testing.T, _ config, err error) {
+				assert.ErrorContains(t, err, "lookup function is nil")
+			},
+		},
 	}
 
-	t.Logf("%s\tShould be able to parse environment variables.", success)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			setEnvs(t, tt.processEnv)
 
-	if diff := cmp.Diff(want, cfg); diff != "" {
-		t.Fatalf("%s\tShould have properly initialized struct value\n%s", failed, diff)
+			lookup := tt.lookup
+			if lookup == nil && !tt.nilLookup {
+				lookup = mapLookup(tt.envs)
+			}
+
+			var cfg config
+			err := ParseWithLookup("test", &cfg, lookup)
+			tt.requireFunc(t, cfg, err)
+		})
+	}
+}
+
+func mapLookup(values map[string]string) LookupFunc {
+	return func(key string) (string, bool) {
+		value, ok := values[key]
+		return value, ok
+	}
+}
+
+func TestFieldEnvKey(t *testing.T) {
+	tests := []struct {
+		name      string
+		prefix    string
+		fieldName string
+		want      string
+	}{
+		{
+			name:      "with-prefix",
+			prefix:    "my_service",
+			fieldName: "DebugHost",
+			want:      "MY_SERVICE_DEBUG_HOST",
+		},
+		{
+			name:      "empty-prefix",
+			prefix:    "",
+			fieldName: "DebugHost",
+			want:      "DEBUG_HOST",
+		},
+		{
+			name:      "acronym",
+			prefix:    "my_service",
+			fieldName: "HTTPPort",
+			want:      "MY_SERVICE_HTTP_PORT",
+		},
 	}
 
-	t.Logf("%s\tShould have properly initialized struct value.", success)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, fieldEnvKey(tt.prefix, tt.fieldName))
+		})
+	}
+}
+
+func TestParse_EnvNameFallback(t *testing.T) {
+	tests := []struct {
+		name string
+		envs map[string]string
+		want string
+	}{
+		{
+			name: "explicit-env-has-priority",
+			envs: map[string]string{
+				"IP_NAME_VAR":  "explicit",
+				"TEST_IP_NAME": "generated",
+			},
+			want: "explicit",
+		},
+		{
+			name: "generated-env-is-fallback",
+			envs: map[string]string{"TEST_IP_NAME": "generated"},
+			want: "generated",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			setEnvs(t, tt.envs)
+
+			var cfg config
+			require.NoError(t, Parse("test", &cfg))
+			assert.Equal(t, tt.want, cfg.IP.Name)
+		})
+	}
+}
+
+func TestParse_MapValueWithColon(t *testing.T) {
+	setEnvs(t, map[string]string{
+		"TEST_ROUTES": "callback:https://example.com:443/path;health:http://localhost:8080/health",
+	})
+
+	var cfg struct {
+		Routes map[string]string
+	}
+
+	require.NoError(t, Parse("test", &cfg))
+	assert.Equal(t, map[string]string{
+		"callback": "https://example.com:443/path",
+		"health":   "http://localhost:8080/health",
+	}, cfg.Routes)
+}
+
+func TestParse_NilStructPointer(t *testing.T) {
+	t.Run("keeps-unused-pointer-nil", func(t *testing.T) {
+		setEnvs(t, nil)
+
+		var cfg struct {
+			Nested *struct {
+				Value string
+			}
+		}
+
+		require.NoError(t, Parse("test", &cfg))
+		assert.Nil(t, cfg.Nested)
+	})
+
+	t.Run("initializes-pointer-for-env-value", func(t *testing.T) {
+		setEnvs(t, map[string]string{"TEST_NESTED_VALUE": "from-env"})
+
+		var cfg struct {
+			Nested *struct {
+				Value string
+			}
+		}
+
+		require.NoError(t, Parse("test", &cfg))
+		require.NotNil(t, cfg.Nested)
+		assert.Equal(t, "from-env", cfg.Nested.Value)
+	})
+
+	t.Run("initializes-pointer-for-default-value", func(t *testing.T) {
+		setEnvs(t, nil)
+
+		var cfg struct {
+			Nested *struct {
+				Value string `conf:"default:from-default"`
+			}
+		}
+
+		require.NoError(t, Parse("test", &cfg))
+		require.NotNil(t, cfg.Nested)
+		assert.Equal(t, "from-default", cfg.Nested.Value)
+	})
 }
 
 func TestParse_Required(t *testing.T) {
-	t.Log("When required values are missing.")
-	{
-		t.Run("required-missing-value", func(t *testing.T) {
-			os.Clearenv()
+	t.Run("required-missing-value", func(t *testing.T) {
+		setEnvs(t, nil)
 
-			var cfg struct {
+		var cfg struct {
+			TestInt    int `conf:"required"`
+			TestString string
+			TestBool   bool
+		}
+
+		assert.Error(t, Parse("test", &cfg))
+	})
+
+	requiredValueTests := []struct {
+		name string
+		envs map[string]string
+		cfg  any
+	}{
+		{
+			name: "required-env-integer-zero",
+			envs: map[string]string{"TEST_TEST_INT": "0"},
+			cfg: &struct {
 				TestInt    int `conf:"required"`
 				TestString string
 				TestBool   bool
-			}
-
-			err := Parse("test", &cfg)
-			if err == nil {
-				t.Fatalf("\t%s\tShould fail for missing required value.", failed)
-			}
-
-			t.Logf("\t%s\tShould fail for missing required value: %s.", success, err)
-		})
-	}
-
-	t.Log("When required env integer is zero.")
-	{
-		t.Run("required-env-integer-zero", func(t *testing.T) {
-			os.Clearenv()
-			_ = os.Setenv("TEST_TEST_INT", "0")
-
-			var cfg struct {
-				TestInt    int `conf:"required"`
-				TestString string
-				TestBool   bool
-			}
-
-			err := Parse("test", &cfg)
-			if err != nil {
-				t.Fatalf("\t%s\tShould have parsed the required zero env integer : %s.", failed, err)
-			}
-			t.Logf("\t%s\tShould have parsed the required zero env integer.", success)
-		})
-	}
-
-	t.Log("When required env string is empty.")
-	{
-		t.Run("required-env-string-empty", func(t *testing.T) {
-			os.Clearenv()
-			_ = os.Setenv("TEST_TEST_STRING", "")
-
-			var cfg struct {
+			}{},
+		},
+		{
+			name: "required-env-string-empty",
+			envs: map[string]string{"TEST_TEST_STRING": ""},
+			cfg: &struct {
 				TestInt    int
 				TestString string `conf:"required"`
 				TestBool   bool
-			}
-
-			err := Parse("test", &cfg)
-			if err != nil {
-				t.Fatalf("\t%s\tShould have parsed the required empty env string : %s.", failed, err)
-			}
-			t.Logf("\t%s\tShould have parsed the required empty env string.", success)
-		})
-	}
-
-	t.Log("When required env boolean is false.")
-	{
-		t.Run("required-env-boolean-false", func(t *testing.T) {
-			os.Clearenv()
-			_ = os.Setenv("TEST_TEST_BOOL", "false")
-
-			var cfg struct {
+			}{},
+		},
+		{
+			name: "required-env-boolean-false",
+			envs: map[string]string{"TEST_TEST_BOOL": "false"},
+			cfg: &struct {
 				TestInt    int
 				TestString string
 				TestBool   bool `conf:"required"`
-			}
+			}{},
+		},
+	}
 
-			err := Parse("test", &cfg)
-			if err != nil {
-				t.Fatalf("\t%s\tSould have parsed the required false env boolean : %s.", failed, err)
-			}
-			t.Logf("\t%s\tSould have parsed the required false env boolean.", success)
+	for _, tt := range requiredValueTests {
+		t.Run(tt.name, func(t *testing.T) {
+			setEnvs(t, tt.envs)
+			assert.NoError(t, Parse("test", tt.cfg))
 		})
 	}
 
-	t.Log("When struct has no fields.")
-	{
-		t.Run("struct-missing-fields", func(t *testing.T) {
-			os.Clearenv()
-
-			var cfg struct {
+	errorTests := []struct {
+		name            string
+		cfg             any
+		wantErrContains string
+	}{
+		{
+			name: "struct-missing-fields",
+			cfg: &struct {
 				testInt    int `conf:"required"`
 				testString string
 				testBool   bool
-			}
-
-			err := Parse("test", &cfg)
-
-			if err == nil {
-				t.Fatalf("\t%s\tShould fail for struct with no exported fields.", failed)
-			}
-			t.Logf("\t%s\tShould fail for struct with no exported fields : %s.", success, err)
-		})
-	}
-
-	t.Log("When required env value missing error should contain env variable.")
-	{
-		t.Run("required-env-missing-error-message", func(t *testing.T) {
-			os.Clearenv()
-
-			var cfg struct {
+			}{},
+		},
+		{
+			name: "required-env-missing-error-message",
+			cfg: &struct {
 				TestInt    int `conf:"required"`
 				TestString string
 				TestBool   bool
-			}
+			}{},
+			wantErrContains: "TEST_TEST_INT",
+		},
+	}
 
-			err := Parse("test", &cfg)
-			if err == nil {
-				t.Fatalf("\t%s\tShould fail for missing required value.", failed)
+	for _, tt := range errorTests {
+		t.Run(tt.name, func(t *testing.T) {
+			setEnvs(t, nil)
+			err := Parse("test", tt.cfg)
+			require.Error(t, err)
+			if tt.wantErrContains != "" {
+				assert.ErrorContains(t, err, tt.wantErrContains)
 			}
-
-			if !strings.Contains(err.Error(), "TEST_TEST_INT") {
-				t.Fatalf("\t%s\tShoud fail for missing required value with env variablae name in message : %s.", failed, err)
-			}
-
-			t.Logf("\t%s\tShoud fail for missing required value with env variablae name in message : %s.", success, err)
 		})
 	}
 }
 
 func TestParse_Errors(t *testing.T) {
-	t.Log("When passing struct to Parse.")
-	{
-		t.Run("not-by-ref", func(t *testing.T) {
-			var cfg struct {
+	tests := []struct {
+		name               string
+		envs               map[string]string
+		cfg                any
+		wantErrContains    []string
+		wantErrNotContains []string
+	}{
+		{
+			name: "not-by-ref",
+			cfg: struct {
 				TestInt    int
 				TestString string
 				TestBool   bool
-			}
-
-			err := Parse("test", cfg)
-			if err == nil {
-				t.Fatalf("\t%s\tShould NOT be able to accept a value by value.", failed)
-			}
-			t.Logf("\t%s\tShould NOT be able to accept a value by value : %s.", success, err)
-		})
-
-		t.Run("not-struct-value", func(t *testing.T) {
-			var cfg []string
-
-			err := Parse("test", &cfg)
-			if err == nil {
-				t.Fatalf("\t%s\tShould NOT be able to pass anything but a struct value.", failed)
-			}
-			t.Logf("\t%s\tShould NOT be able to pass anything but a struct value : %s.", success, err)
-		})
-	}
-
-	t.Log("When bad tags to Parse.")
-	{
-		t.Run("tag-missing-value", func(t *testing.T) {
-			var cfg struct {
+			}{},
+		},
+		{
+			name: "not-struct-value",
+			cfg:  &[]string{},
+		},
+		{
+			name: "tag-missing-value",
+			cfg: &struct {
 				TestInt    int `conf:"default:"`
 				TestString string
 				TestBool   bool
-			}
+			}{},
+		},
+		{
+			name: "unknown-tag",
+			cfg: &struct {
+				TestInt int `conf:"requiredx"`
+			}{},
+			wantErrContains: []string{`unknown tag "requiredx"`},
+		},
+		{
+			name: "unknown-tag-with-value",
+			cfg: &struct {
+				TestInt int `conf:"source:TEST_TEST_INT"`
+			}{},
+			wantErrContains: []string{`unknown tag "source"`},
+		},
+		{
+			name: "field-error-contains-env-value",
+			envs: map[string]string{"TEST_TEST_INT": "not-an-int"},
+			cfg: &struct {
+				TestInt int `conf:"default:10"`
+			}{},
+			wantErrContains:    []string{"not-an-int"},
+			wantErrNotContains: []string{"converting '10'"},
+		},
+	}
 
-			err := Parse("test", &cfg)
-			if err == nil {
-				t.Fatalf("\t%s\tShould NOT be able to accept tag missing value.", failed)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			setEnvs(t, tt.envs)
+
+			err := Parse("test", tt.cfg)
+			require.Error(t, err)
+			for _, want := range tt.wantErrContains {
+				require.ErrorContains(t, err, want)
 			}
-			t.Logf("\t%s\tShould NOT be able to accept tag missing value : %s.", success, err)
+			for _, notWant := range tt.wantErrNotContains {
+				assert.NotContains(t, fmt.Sprint(err), notWant)
+			}
 		})
+	}
+}
+
+func setEnvs(t *testing.T, envs map[string]string) {
+	t.Helper()
+
+	original := os.Environ()
+	t.Cleanup(func() {
+		os.Clearenv()
+		for _, entry := range original {
+			key, value, _ := strings.Cut(entry, "=")
+			require.NoError(t, os.Setenv(key, value))
+		}
+	})
+
+	os.Clearenv()
+	for key, value := range envs {
+		require.NoError(t, os.Setenv(key, value))
 	}
 }

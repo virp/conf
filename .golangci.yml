@@ -1,0 +1,194 @@
+# golangci-lint configuration for conf
+# https://golangci-lint.run/usage/configuration/
+
+version: "2"
+
+run:
+  # Timeout for analysis
+  timeout: 5m
+  # Include test files
+  tests: true
+
+linters:
+  # Disable all linters by default and enable only what we need
+  default: none
+  enable:
+    # === Default linters (always recommended) ===
+
+    # govet: Reports suspicious constructs and bugs
+    # Reason: Catches common mistakes like wrong printf verbs, unreachable code
+    - govet
+
+    # errcheck: Checks for unhandled errors
+    # Reason: Critical for DB operations where errors must be handled
+    - errcheck
+
+    # staticcheck: Comprehensive static analysis
+    # Reason: Finds bugs, deprecated code, and inefficiencies (includes gosimple)
+    - staticcheck
+
+    # ineffassign: Detects ineffective assignments
+    # Reason: Catches dead code and unused variable assignments
+    - ineffassign
+
+    # === Additional recommended linters ===
+
+    # gocritic: Opinionated linter with many checks
+    # Reason: Finds bugs, performance issues, and style problems
+    - gocritic
+
+    # misspell: Finds spelling mistakes
+    # Reason: Catches typos in comments, strings, and identifiers
+    - misspell
+
+    # revive: Configurable linter with many useful rules
+    # Reason: Provides additional style and correctness checks
+    - revive
+
+    # unparam: Reports unused function parameters
+    # Reason: Helps keep function signatures clean
+    - unparam
+
+    # prealloc: Suggests pre-allocation for slices
+    # Reason: Performance optimization for slice operations
+    - prealloc
+
+    # makezero: Catches nil-slice issues
+    # Reason: Prevents bugs with append on nil slices
+    - makezero
+
+    # spancheck: Checks OpenTelemetry span usage
+    # Reason: Ensures proper span lifecycle (Start/End) in tracing code
+    - spancheck
+
+    # exhaustive: Ensures exhaustive switch statements
+    # Reason: Catches missing cases when new enum values are added
+    - exhaustive
+
+    # asasalint: Checks `any` usage
+    # Reason: Helps identify places using any type (used in panic handling)
+    - asasalint
+
+    # copyloopvar: Checks for loop variable capture bugs
+    # Reason: Prevents subtle bugs with loop variables in goroutines
+    - copyloopvar
+
+    # perfsprint: Checks for performance issues with fmt.Sprintf
+    # Reason: Suggests more efficient string formatting
+    - perfsprint
+
+    # testifylint: Checks testify usage
+    # Reason: Ensures proper use of testify assertions in tests
+    - testifylint
+
+    # errorlint: Checks error wrapping and handling
+    # Reason: Ensures proper error wrapping for Go 1.13+ error handling
+    - errorlint
+
+    # nilerr: Checks for returning nil even if error is not nil
+    # Reason: Catches common error handling mistakes
+    - nilerr
+
+    # modernize: Reports outdated Go code patterns
+    # Reason: Suggests modern Go idioms and simplifications (e.g., slices package, new syntax)
+    - modernize
+
+  settings:
+    # govet settings
+    govet:
+      enable-all: true
+      disable:
+        - fieldalignment # Too verbose for struct-heavy code
+
+    # gocritic settings
+    gocritic:
+      enabled-tags:
+        - diagnostic  # Bug detection
+        - performance  # Performance improvements
+        - style  # Code style
+        - opinionated  # Opinionated suggestions
+      disabled-checks:
+        - importShadow # Too strict for common variable names
+        - unnamedResult # Unnamed short returns are clearer for small lookup helpers
+
+    # revive settings
+    revive:
+      confidence: 0.8
+      rules:
+        - name: exported
+          arguments:
+            - checkPrivateReceivers
+            - sayRepetitiveInsteadOfStutters
+        - name: blank-imports
+        - name: var-naming
+          arguments:
+            - ["ID"] # Allow ID in variable names (e.g., txID)
+        - name: error-strings
+
+    # spancheck settings
+    spancheck:
+      checks:
+        - end
+        - set-status
+
+    # testifylint settings
+    testifylint:
+      enable-all: true
+
+    # misspell settings
+    misspell:
+      locale: US
+
+    # exhaustive settings
+    exhaustive:
+      explicit-exhaustive-switch: true
+
+  exclusions:
+    # Exclude some checks for tests
+    rules:
+      # Allow unused parameters in tests (test signatures are fixed)
+      - path: ".*_test\\.go"
+        linters:
+          - unparam
+          - unused
+          - revive
+        text: "unused-parameter"
+
+      # Allow longer functions in tests
+      - path: ".*_test\\.go"
+        linters:
+          - funlen
+        text: "is too long"
+
+      # Allow magic numbers in tests (assertions, test data)
+      - path: ".*_test\\.go"
+        linters:
+          - mnd
+
+      # Exclude specific false positives
+      - linters:
+          - errcheck
+        text: "Error return value of .+ is not checked"
+
+formatters:
+  # Enable formatters
+  enable:
+    # gofmt: Checks code formatting
+    # Reason: Ensures consistent code style across the project
+    - gofmt
+    # goimports: Checks import ordering and formatting
+    # Reason: Keeps imports organized and properly formatted
+    - goimports
+
+issues:
+  # Maximum issues to show
+  max-issues-per-linter: 0
+  # Maximum same issues to show
+  max-same-issues: 0
+
+output:
+  formats:
+    text:
+      colors: true
+      print-linter-name: true
+      print-issued-lines: true
