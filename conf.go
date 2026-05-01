@@ -75,18 +75,8 @@ func processFields(fields []field, envValues map[string]string) error {
 	for i := range fields {
 		fld := &fields[i]
 
-		// Set any default value into the struct for this field.
-		if fld.options.defaultVal != "" {
-			if err := processField(true, fld.options.defaultVal, fld.value); err != nil {
-				return &FieldError{
-					fieldName: fld.name,
-					envKey:    primaryEnvKey(fld),
-					typeName:  fld.value.Type().String(),
-					value:     fld.options.defaultVal,
-					err:       err,
-				}
-			}
-			markCreatedPointers(fld)
+		if err := applyFieldDefault(fld); err != nil {
+			return err
 		}
 
 		value, envKey, ok := lookupFieldEnv(fld, envValues)
@@ -100,19 +90,44 @@ func processFields(fields []field, envValues map[string]string) error {
 		}
 
 		// A value was found so update the struct value with it.
-		if err := processField(false, value, fld.value); err != nil {
-			return &FieldError{
-				fieldName: fld.name,
-				envKey:    envKey,
-				typeName:  fld.value.Type().String(),
-				value:     value,
-				err:       err,
-			}
+		if err := applyFieldString(fld, envKey, value); err != nil {
+			return err
 		}
-		markCreatedPointers(fld)
 	}
 
 	return nil
+}
+
+func applyFieldDefault(fld *field) error {
+	if fld.options.defaultVal == "" {
+		return nil
+	}
+
+	if err := processField(true, fld.options.defaultVal, fld.value); err != nil {
+		return fieldAssignmentError(fld, primaryEnvKey(fld), fld.options.defaultVal, err)
+	}
+	markCreatedPointers(fld)
+
+	return nil
+}
+
+func applyFieldString(fld *field, sourceKey, value string) error {
+	if err := processField(false, value, fld.value); err != nil {
+		return fieldAssignmentError(fld, sourceKey, value, err)
+	}
+	markCreatedPointers(fld)
+
+	return nil
+}
+
+func fieldAssignmentError(fld *field, sourceKey, value string, err error) *FieldError {
+	return &FieldError{
+		fieldName: fld.name,
+		envKey:    sourceKey,
+		typeName:  fld.value.Type().String(),
+		value:     value,
+		err:       err,
+	}
 }
 
 func primaryEnvKey(fld *field) string {

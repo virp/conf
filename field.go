@@ -31,6 +31,7 @@ func (err *FieldError) Error() string {
 type field struct {
 	name        string
 	envKeys     []string
+	yamlPath    []string
 	value       reflect.Value
 	options     fieldOptions
 	createdPtrs []*createdPointer
@@ -50,7 +51,7 @@ type fieldOptions struct {
 // extractFields uses reflection to examine the struct and generate the keys.
 func extractFields(prefix string, target any) ([]field, error) {
 	var createdPtrs []*createdPointer
-	fields, err := extractFieldsWithCreated(prefix, target, &createdPtrs, nil)
+	fields, err := extractFieldsWithCreated(prefix, target, &createdPtrs, nil, nil, false)
 	if err != nil {
 		cleanupCreatedPointerList(createdPtrs)
 		return nil, err
@@ -59,7 +60,25 @@ func extractFields(prefix string, target any) ([]field, error) {
 	return fields, nil
 }
 
-func extractFieldsWithCreated(prefix string, target any, allCreatedPtrs *[]*createdPointer, parentCreatedPtrs []*createdPointer) ([]field, error) {
+func extractYAMLFields(target any) ([]field, error) {
+	var createdPtrs []*createdPointer
+	fields, err := extractFieldsWithCreated("", target, &createdPtrs, nil, nil, true)
+	if err != nil {
+		cleanupCreatedPointerList(createdPtrs)
+		return nil, err
+	}
+
+	return fields, nil
+}
+
+func extractFieldsWithCreated(
+	prefix string,
+	target any,
+	allCreatedPtrs *[]*createdPointer,
+	parentCreatedPtrs []*createdPointer,
+	parentYAMLPath []string,
+	useYAMLTags bool,
+) ([]field, error) {
 	s := reflect.ValueOf(target)
 
 	if s.Kind() != reflect.Ptr {
@@ -89,6 +108,14 @@ func extractFieldsWithCreated(prefix string, target any, allCreatedPtrs *[]*crea
 		}
 
 		fieldName := structField.Name
+		fieldYAMLPath := parentYAMLPath
+		if useYAMLTags && !structField.Anonymous {
+			yamlName, skip := yamlFieldName(&structField)
+			if skip {
+				continue
+			}
+			fieldYAMLPath = appendYAMLPath(parentYAMLPath, yamlName)
+		}
 
 		fieldOpts, err := parseTag(fieldTags)
 		if err != nil {
@@ -130,7 +157,7 @@ func extractFieldsWithCreated(prefix string, target any, allCreatedPtrs *[]*crea
 			}
 
 			embeddedPtr := f.Addr().Interface()
-			innerFields, err := extractFieldsWithCreated(innerPrefix, embeddedPtr, allCreatedPtrs, fieldCreatedPtrs)
+			innerFields, err := extractFieldsWithCreated(innerPrefix, embeddedPtr, allCreatedPtrs, fieldCreatedPtrs, fieldYAMLPath, useYAMLTags)
 			if err != nil {
 				return nil, err
 			}
@@ -145,6 +172,7 @@ func extractFieldsWithCreated(prefix string, target any, allCreatedPtrs *[]*crea
 			fld := field{
 				name:        fieldName,
 				envKeys:     envKeys,
+				yamlPath:    fieldYAMLPath,
 				value:       f,
 				options:     fieldOpts,
 				createdPtrs: fieldCreatedPtrs,
@@ -154,6 +182,27 @@ func extractFieldsWithCreated(prefix string, target any, allCreatedPtrs *[]*crea
 	}
 
 	return fields, nil
+}
+
+func yamlFieldName(structField *reflect.StructField) (string, bool) {
+	tag := structField.Tag.Get("yaml")
+	name, _, _ := strings.Cut(tag, ",")
+	if name == "-" {
+		return "", true
+	}
+	if name != "" {
+		return name, false
+	}
+
+	return strings.ToLower(strings.Join(camelSplit(structField.Name), "_")), false
+}
+
+func appendYAMLPath(parent []string, name string) []string {
+	path := make([]string, 0, len(parent)+1)
+	path = append(path, parent...)
+	path = append(path, name)
+
+	return path
 }
 
 func fieldEnvKey(prefix, fieldName string) string {

@@ -1,6 +1,6 @@
 # Conf
 Simple configuration package for Go applications.
-It is easy to use and supports only environment variables (for [12-Factor apps](https://12factor.net/#the_twelve_factors)).
+It is easy to use and supports environment variables as the highest-priority source (for [12-Factor apps](https://12factor.net/#the_twelve_factors)).
 
 ## Install
 ```bash
@@ -61,6 +61,64 @@ func main() {
 	)
 }
 
+```
+
+## YAML Files
+
+Use `ParseYaml` to load defaults and YAML values first, then override them with environment variables when they are set:
+
+```go
+data, err := os.Open("config.yaml")
+if err != nil {
+	log.Fatal(err)
+}
+defer data.Close()
+
+var cfg Config
+if err := conf.ParseYaml(data, &cfg); err != nil {
+	log.Fatal(err)
+}
+```
+
+`ParseYaml` does not accept an env prefix. Generated env names use the same rules as `Parse` with an empty prefix:
+
+```go
+type Config struct {
+	Debug bool        // DEBUG
+	Redis RedisConfig // REDIS_ADDR
+}
+```
+
+Explicit env names still have priority over generated names:
+
+```go
+type AWS struct {
+	Key string `conf:"required,env:AWS_ACCESS_KEY_ID"` // AWS_ACCESS_KEY_ID or KEY
+}
+```
+
+YAML keys use `yaml` tags. Without a `yaml` tag, field names are converted to lower snake case:
+
+```go
+type RedisConfig struct {
+	Addr      string   `conf:"required"`       // addr
+	Endpoints []string `yaml:"redis_servers"`  // redis_servers
+	Secret    string   `yaml:"-"`              // ignored in YAML
+}
+```
+
+Nested structs are read from nested YAML mappings, and embedded structs are read inline. YAML sequences and mappings are assigned natively, so slices and maps do not use the env string formats:
+
+```yaml
+debug: true
+redis:
+  addr: localhost:6379
+  redis_servers:
+    - localhost:6379
+    - localhost:6380
+urls:
+  api: https://api.example.com
+  admin: https://admin.example.com
 ```
 
 ## Environment Names
